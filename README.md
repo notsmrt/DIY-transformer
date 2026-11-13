@@ -67,19 +67,6 @@ This feeds the model a prompt of about 700 tokens, generates 100 more, and print
 
 It runs one untimed warm-up pass first, so the numbers do not include one-time startup cost.
 
-### `token_ids.py`: see tokenization and embeddings
-
-```sh
-python token_ids.py
-```
-
-This prints the token IDs for `"The cat sat"` and the shape of their embedding vectors: three tokens, each a vector of 896 numbers.
-
-```
-[785, 8251, 7578]
-(3, 896)
-```
-
 ### `load_tensors.py`: inspect the weights
 
 ```sh
