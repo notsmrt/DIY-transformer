@@ -1,7 +1,6 @@
 from model import forward, sample, tokenizer, repetition_penalty
-import mlx.core as mx
-import mlx.nn as nn
 import time
+
 
 text = """The old lighthouse stood at the edge of the cliff, its white paint peeling after decades of salt wind and winter storms. Every evening, the keeper climbed the narrow spiral staircase, counting the one hundred and twelve steps out of habit, and lit the great lamp that swept its beam across the dark water. Fishing boats returning late relied on that light to find the safe channel between the rocks, and more than one captain had sent a letter of thanks after a bad night at sea.
 
@@ -17,32 +16,43 @@ The council agreed. A volunteer from the library spent the next winter scanning 
 
 The keeper attended the exhibition on its last day. He walked slowly past the displays, reading pages he had written years earlier, some of which he had forgotten entirely. When a reporter asked him how it felt to see his work on display, he said that it was strange to discover that keeping a record had also been a way of keeping company. Then he went home, because the evening was coming on, and the lamp still needed to be lit."""
 
-def warm_up(text):
+
+def warm_up(text, temperature=0.5, top_p=0.9, penalty=1.1):
     ids = tokenizer.encode(text).ids
     logits = forward(ids)[-1]
-    logits = repetition_penalty(logits, ids, 1.1)
-    next_id = sample(logits, 0.5, 0.9)
+    logits = repetition_penalty(logits, ids, penalty)
+    next_id = sample(logits, temperature, top_p)
     ids.append(next_id)
 
-warm_up(text)
 
-def run(text, length):
+def run(text, length, temperature=0.5, top_p=0.9, penalty=1.1):
     run_times = []
     ids = tokenizer.encode(text).ids
-    for i in range(length):
-        start_time = time.perf_counter()
+
+    start = time.perf_counter()
+    logits = forward(ids)[-1]
+    logits = repetition_penalty(logits, ids, penalty)
+    next_id = sample(logits, temperature, top_p)
+    ids.append(next_id)
+    run_times.append(time.perf_counter() - start)
+
+    for _ in range(length - 1):
+        start = time.perf_counter()
         logits = forward(ids)[-1]
-        logits = repetition_penalty(logits, ids, 1.1)
-        next_id = sample(logits, 0.5, 0.9)
+        logits = repetition_penalty(logits, ids, penalty)
+        next_id = sample(logits, temperature, top_p)
         ids.append(next_id)
-        end_time = time.perf_counter()
-        run_times.append(end_time-start_time)
+        run_times.append(time.perf_counter() - start)
+
     return run_times
 
-times = run(text, 100)
 
-print("ttft:",times[0])
-print("itls:",times[1:])
-print("average itl:", sum(times[1:])/len(times[1:]))
-print("average token per second:", 1/(sum(times[1:])/len(times[1:])))
+if __name__ == "__main__":
+    warm_up(text)
+    times = run(text, 100)
+
+    print("ttft:", times[0])
+    print("itls:", times[1:])
+    print("average itl:", sum(times[1:]) / len(times[1:]))
+    print("average token per second:", 1 / (sum(times[1:]) / len(times[1:])))
 
