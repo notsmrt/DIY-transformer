@@ -82,7 +82,6 @@ This prints the name, shape, and data type of every attention weight in layer 0.
 | `model.py` | The forward pass, sampling, and generation loop |
 | `config.py` | The model's dimensions, copied from `config.json` |
 | `bench.py` | The speed benchmark |
-| `token_ids.py` | A tokenizer and embedding demo |
 | `load_tensors.py` | A weight inspector |
 | `config.json` | The model's original config from Hugging Face, kept for reference |
 | `model.safetensors`, `tokenizer.json` | The downloaded weights and tokenizer |
