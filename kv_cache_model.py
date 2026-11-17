@@ -113,7 +113,7 @@ def attention(x, w, layer, prefill=False, pos=None):
     out = mx.fast.scaled_dot_product_attention(
         q[None], k[None], v[None],
         scale=head_dim**-0.5,
-        mask="causal",
+        mask=None,
     )[0]
     length = q.shape[1]
     out = mx.transpose(out, axes=(1,0,2))
@@ -123,7 +123,7 @@ def attention(x, w, layer, prefill=False, pos=None):
 k_cache = []
 v_cache = []
 
-def forward(ids, prefill=False, pos=None):
+def forward(ids, weights, prefill=False, pos=None, all_pos=False):
     if prefill:
         x = weights["model.embed_tokens.weight"][mx.array(ids)] 
         k_layers = []
@@ -136,7 +136,10 @@ def forward(ids, prefill=False, pos=None):
             x = x + mlp(normed, weights, layer)
             k_layers.append(k)
             v_layers.append(v)
-        x = rms_norm(x[-1:], weights["model.norm.weight"])
+        if all_pos:
+            x = rms_norm(x, weights["model.norm.weight"])
+        else:
+            x = rms_norm(x[-1:], weights["model.norm.weight"])
         k_cache.append(k_layers)
         v_cache.append(v_layers)
         return x @ weights["model.embed_tokens.weight"].T    
@@ -149,21 +152,40 @@ def forward(ids, prefill=False, pos=None):
         x = x + mlp(normed, weights, layer)
         k_cache[-1][layer] = k
         v_cache[-1][layer] = v
-    x = rms_norm(x[-1:], weights["model.norm.weight"])
+    if all_pos:
+        x = rms_norm(x, weights["model.norm.weight"])
+    else:
+        x = rms_norm(x[-1:], weights["model.norm.weight"])
     return x @ weights["model.embed_tokens.weight"].T       
 
 def generate(text, n=50, temperature=0.2, top_p=0.8, penalty=1.1):
     ids = tokenizer.encode(text).ids
-    logits = forward(ids, True)[-1]        
+    logits = forward(ids, weights, True)[-1]        
     logits = repetition_penalty(logits, ids, penalty)
     next_id = sample(logits, temperature, top_p)
     ids.append(next_id)
     for _ in range(n-1):
-        logits = forward([ids[-1]], pos=len(ids)-1)[-1]        
+        logits = forward([ids[-1]], weights, pos=len(ids)-1)[-1]        
         logits = repetition_penalty(logits, ids, penalty)
         next_id = sample(logits, temperature, top_p)
         ids.append(next_id)
     return tokenizer.decode(ids)
 
+def save_logits(text, name, n=50, temperature=0.2, top_p=0.8, penalty=1.1):
+    k_cache.clear()
+    v_cache.clear()
+    ids = tokenizer.encode(text).ids
+    logits = forward(ids, weights, True, all_pos=True)
+    mx.save(name, logits)
+    mx.save(name + "_ids", mx.array(ids))
+    return logits
+
+lighthouse_prompt = config.lighthouse_prompt
+python_prompt = config.python_prompt
+reef_prompt = config.reef_prompt
+soup_prompt = config.soup_prompt
+
 if __name__ == "__main__":
-    print(generate(text))
+    k_cache.clear()
+    v_cache.clear()
+    print(generate(lighthouse_prompt, n=100, temperature=0.2, top_p=0.8, penalty=1.1))

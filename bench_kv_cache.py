@@ -1,4 +1,4 @@
-from kv_cache_model import forward, sample, tokenizer, repetition_penalty
+from kv_cache_model import forward, sample, tokenizer, repetition_penalty, weights
 import time
 
 text = """The old lighthouse stood at the edge of the cliff, its white paint peeling after decades of salt wind and winter storms. Every evening, the keeper climbed the narrow spiral staircase, counting the one hundred and twelve steps out of habit, and lit the great lamp that swept its beam across the dark water. Fishing boats returning late relied on that light to find the safe channel between the rocks, and more than one captain had sent a letter of thanks after a bad night at sea.
@@ -18,7 +18,7 @@ The keeper attended the exhibition on its last day. He walked slowly past the di
 
 def warm_up(text, temperature=0.5, top_p=0.9, penalty=1.1):
     ids = tokenizer.encode(text).ids
-    logits = forward(ids, True)[-1]
+    logits = forward(ids, weights, True)[-1]
     logits = repetition_penalty(logits, ids, penalty)
     next_id = sample(logits, temperature, top_p)
     ids.append(next_id)
@@ -29,7 +29,7 @@ def run(text, length, temperature=0.5, top_p=0.9, penalty=1.1):
     ids = tokenizer.encode(text).ids
 
     start = time.perf_counter()
-    logits = forward(ids, True)[-1]
+    logits = forward(ids, weights, True)[-1]
     logits = repetition_penalty(logits, ids, penalty)
     next_id = sample(logits, temperature, top_p)
     ids.append(next_id)
@@ -37,7 +37,7 @@ def run(text, length, temperature=0.5, top_p=0.9, penalty=1.1):
 
     for _ in range(length - 1):
         start = time.perf_counter()
-        logits = forward([ids[-1]], pos=len(ids) - 1)[-1]
+        logits = forward([ids[-1]], weights, pos=len(ids) - 1)[-1]
         logits = repetition_penalty(logits, ids, penalty)
         next_id = sample(logits, temperature, top_p)
         ids.append(next_id)
