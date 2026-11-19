@@ -4,7 +4,7 @@ import mlx.nn as nn
 import config
 
 tokenizer = Tokenizer.from_file("tokenizer.json")
-weights = mx.load("model.safetensors")
+weights = mx.load(str(config.WEIGHTS_PATH))
 
 rope = nn.RoPE(dims=config.head_dim, traditional=False, base=config.rope_theta)
 
@@ -93,7 +93,6 @@ def attention(x, w, layer, prefill=False, pos=None):
     q = x @ w[p + "q_proj.weight"].T + w[p + "q_proj.bias"]
     q = q.reshape(x.shape[0], attn_heads, head_dim)
     q = mx.transpose(q, axes=(1, 0, 2))
-    # offset is only applied correctly with a leading batch axis
     q = rope(q[None], offset=pos)[0]
 
     k = x @ w[p + "k_proj.weight"].T + w[p + "k_proj.bias"]
@@ -160,12 +159,12 @@ def forward(ids, weights, prefill=False, pos=None, all_pos=False):
 
 def generate(text, n=50, temperature=0.2, top_p=0.8, penalty=1.1):
     ids = tokenizer.encode(text).ids
-    logits = forward(ids, weights, True)[-1]        
+    logits = forward(ids, weights, True)[-1]
     logits = repetition_penalty(logits, ids, penalty)
     next_id = sample(logits, temperature, top_p)
     ids.append(next_id)
     for _ in range(n-1):
-        logits = forward([ids[-1]], weights, pos=len(ids)-1)[-1]        
+        logits = forward([ids[-1]], weights, pos=len(ids)-1)[-1]
         logits = repetition_penalty(logits, ids, penalty)
         next_id = sample(logits, temperature, top_p)
         ids.append(next_id)

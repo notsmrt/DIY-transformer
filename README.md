@@ -11,6 +11,8 @@ There are two versions of the model:
 
 To check that the hand-written model is correct, `kv_cache_model.py` can save its logits for a set of test prompts, and `metrics.py` compares them against [`mlx-lm`](https://github.com/ml-explore/mlx-lm) running the same weights.
 
+The second half of the project is quantization. `quantize.py` implements 8-bit and 4-bit weight quantization from scratch, `quantize_model.py` applies it to every linear layer and measures what it does to the model's output, and `protect.py` and `noise_test.py` dig into why 4-bit hurts so much more than 8-bit. The short version: 8-bit is nearly free, 4-bit is not, and the cause is not as simple as I first expected. See [Quantization](#quantization).
+
 ## Setup
 
 You need a Mac with Apple Silicon (MLX requires it) and Python 3.9 or newer.
@@ -134,6 +136,115 @@ Results on the four test prompts:
 
 The differences come from bfloat16 rounding, not from a mistake in the model. They stay the same size from the first position to the last instead of growing, which a RoPE or attention bug would cause. At every position where the top-1 tokens disagree, `mlx-lm`'s own top two logits were tied or one bfloat16 step (0.125) apart. The comparison covers the prefill path only; the single-token decode path is not compared.
 
+`metrics.py` also takes two optional arguments, which the quantization scripts use:
+
+```sh
+python metrics.py [reference] [tag]
+python metrics.py mine q4g64
+```
+
+`reference` is `mlx_lm` (the default) or `mine`. With `mine`, the reference logits come from this project's own `forward()` with the original bf16 weights, so the numbers show only what quantization did. `tag` picks which saved logits to score, so `q4g64` scores `logits_lighthouse_q4g64.npy` and so on. It also prints the five positions with the highest KL.
+
+### `quantize.py`: quantize one weight matrix
+
+```sh
+python quantize.py [weight name]
+```
+
+This quantizes a single 2-D weight matrix and reports how far the reconstructed weights are from the originals. The default matrix is `model.layers.12.mlp.down_proj.weight`. The function `quantize(w, bits, scheme, group_size, symmetric)` supports:
+
+- Three scopes for the scale: `tensor` (one scale for the whole matrix), `row` (one per output row) and `group` (one per `group_size` consecutive weights in a row).
+- Symmetric quantization, which uses the absolute max and maps to signed integers (-7 to 7 at 4 bits), and asymmetric quantization, which uses the min and max and maps to unsigned integers (0 to 15 at 4 bits).
+
+Reconstruction error on layer 12's `down_proj` (shape 896 by 4864):
+
+| Bits | Scheme | Relative error | Scales |
+| --- | --- | --- | --- |
+| 8 | tensor | 5.52% | 1 |
+| 8 | row | 1.19% | 896 |
+| 8 | group of 64 | 0.66% | 68,096 |
+| 4 | tensor | 82.57% | 1 |
+| 4 | row | 21.43% | 896 |
+| 4 | group of 64 | 11.87% | 68,096 |
+| 4 | group of 32 | 10.44% | 136,192 |
+| 4 | group of 64, asymmetric | 9.58% | 68,096 |
+
+Smaller scopes help a lot, especially at 4 bits, where a single per-tensor scale is useless. Asymmetric quantization at group size 64 does better than symmetric at group size 32 and uses half as many scales.
+
+### `quantize_model.py`: quantize the whole model
+
+```sh
+python quantize_model.py [bits] [group_size] [asym]
+python quantize_model.py 4 64
+python metrics.py mine q4g64
+```
+
+This is fake quantization. Every linear weight (`q_proj`, `k_proj`, `v_proj`, `o_proj`, `gate_proj`, `up_proj`, `down_proj`) is quantized and then dequantized straight back to bf16, and the normal `forward()` runs on the result. That means the output shows the accuracy cost of quantization exactly, but the model does not get any smaller or faster, since the weights are stored as bf16 again. The embedding (which is also the output head), the norms and the biases stay in bf16.
+
+It saves logits for the four test prompts under a tag like `q4g64` (`a` is appended for asymmetric), and also prints the residual stream for the first few layers of the original and quantized weights.
+
+Results, scored against this project's own bf16 logits. Each cell is the average over the four test prompts:
+
+| Setting | KL mean | Top-1 agreement |
+| --- | --- | --- |
+| 8-bit, group 128 | 0.0023 | 98.14% |
+| 8-bit, group 64 | 0.0022 | 97.93% |
+| 4-bit, group 64 | 0.2430 | 80.30% |
+| 4-bit, group 64, asymmetric | 0.2153 | 81.08% |
+| 4-bit, group 32 | 0.1869 | 83.45% |
+
+Perplexity tells the same story. On the lighthouse prompt, bf16 is 16.60, 8-bit is about 16.45 and 4-bit group 64 is 20.10. On the python game prompt, bf16 is 1.45, 8-bit is 1.43 and 4-bit is 1.65.
+
+8-bit is as good as lossless here. Its KL is about the same as the bf16 rounding noise measured against `mlx-lm` earlier (around 0.001), and perplexity is unchanged within noise. 4-bit is a real loss: the model agrees with the original on about 8 in 10 next tokens. Smaller groups and asymmetric ranges both help, but neither closes the gap.
+
+### `noise_test.py`: is one noisy matrix the problem?
+
+```sh
+python noise_test.py
+```
+
+4-bit quantization of layer 12's `down_proj` has about 12% relative error, so I wanted to know whether error of that size in a single matrix could explain the damage. This adds Gaussian noise to that one matrix, with a standard deviation of 1% and 10% of the matrix's own standard deviation, and measures the change in output.
+
+| Noise | KL mean (4 prompts) | Top-1 agreement (4 prompts) |
+| --- | --- | --- |
+| 1% | 0.0003 to 0.0008 | 98.3% to 100% |
+| 10% | 0.0011 to 0.0018 | 97.4% to 99.6% |
+
+Even at 10%, one matrix barely moves the output. The KL is in the same range as 8-bit quantization of the whole model. So the 4-bit damage does not come from any one matrix being badly approximated. It comes from error adding up across all the layers, or from a small number of especially sensitive spots.
+
+### `protect.py`: massive activations and selective protection
+
+```sh
+python protect.py --detect     # only report where the outliers are
+python protect.py              # detect, then run the protection experiment
+python protect.py 2 3 21       # skip detection, protect these layers
+```
+
+Some transformers write a huge value into the residual stream at the first token. This script scans every prompt, position and residual dimension and flags any MLP or attention output larger than 100. On this model it finds three MLP layers, all writing into residual dimension 62 at position 0:
+
+| Layer | Largest MLP output | Responsible neurons |
+| --- | --- | --- |
+| 2 | 736 | neuron 813 |
+| 3 | 880 | neurons 2247 and 3016 |
+| 21 | 1616 | neuron 567 |
+
+For comparison, every other MLP layer stays under about 28 (the next biggest is layer 5 at 27.8), and every attention output stays under about 31. The responsible neurons are almost silent at every other position, with a maximum activation of 1 or less, so these are genuine single-token outliers and not just large layers.
+
+The experiment then quantizes everything to 4 bits (group 64) except for some of these layers, which are left in bf16, and compares. Average over the four prompts:
+
+| Variant | KL mean | Top-1 agreement |
+| --- | --- | --- |
+| All 4-bit | 0.2430 | 80.30% |
+| Layer 2 MLP in bf16 | 0.2313 | 80.71% |
+| Layer 3 MLP in bf16 | 0.2364 | 80.78% |
+| Layer 21 MLP in bf16 | 0.2357 | 80.15% |
+| Layers 2, 3 and 21 MLP in bf16 | 0.1846 | 80.63% |
+| Layers 2, 3 and 21 `down_proj` only in bf16 | 0.2019 | 79.57% |
+
+Protecting a single layer does almost nothing. Protecting all three gives the best result, cutting KL by about a quarter, from 0.243 to 0.185, but top-1 agreement stays around 80%. Keeping only the `down_proj` weights in bf16 recovers part of the gain. So the massive activations are a real contributor to the 4-bit error, but not the main one. The script also prints how KL is spread across each prompt, to show whether the damage is concentrated near the start or the worst positions.
+
+I have not tested other ways to close the gap, such as calibration-based methods like GPTQ or AWQ, or quantizing the embedding.
+
 ### `bench.py` and `bench_kv_cache.py`: measure speed
 
 ```sh
@@ -174,7 +285,11 @@ This prints the name, shape, and data type of every attention weight in layer 0.
 | `model.py` | The reference forward pass, sampling, and generation loop |
 | `kv_cache_model.py` | The same model with a KV cache and `mx.fast` kernels; also saves logits for the test prompts |
 | `metrics.py` | Compares the saved logits against `mlx-lm` (KL divergence, top-1 agreement, perplexity) |
-| `config.py` | The model's dimensions, copied from `config.json`, and the four test prompts |
+| `quantize.py` | Per-tensor, per-row and per-group quantization of one weight matrix, symmetric or asymmetric |
+| `quantize_model.py` | Fake-quantizes every linear layer and saves logits for scoring with `metrics.py` |
+| `protect.py` | Finds massive activations and tests keeping those layers in bf16 |
+| `noise_test.py` | Adds noise to one matrix to see how much a single layer matters |
+| `config.py` | The model's dimensions, copied from `config.json`, the four test prompts, and the weights path |
 | `bench.py` | The speed benchmark for `model.py` |
 | `bench_kv_cache.py` | The speed benchmark for `kv_cache_model.py` |
 | `bench_mlx.py` | The same benchmark run through `mlx-lm` |

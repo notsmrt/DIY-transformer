@@ -1,3 +1,8 @@
+from pathlib import Path
+
+MODEL_DIR = Path(__file__).resolve().parent
+WEIGHTS_PATH = MODEL_DIR / "model.safetensors"
+
 attention_heads = 14
 kv_heads = 2
 head_dim = 64
@@ -7,7 +12,6 @@ rope_theta = 1000000.0
 rms_norm_eps = 1e-6
 max_position_embeddings = 32768
 
-# 1. Narrative: The Lighthouse
 lighthouse_prompt = """
 The lighthouse stood alone on the edge of the northern coastline, its white walls battered by decades of wind and salt. Thomas had been its keeper for forty-three years, and he knew every creaking floorboard and rusted hinge in the building.
 
@@ -24,7 +28,6 @@ The wind nearly knocked him backward. He had spent his entire life warning ships
 He stepped into the storm, unaware that the ship had disappeared from the horizon.
 """
 
-# 2. Code: Python Number Guessing Game
 python_prompt = """
 import random
 
@@ -60,7 +63,6 @@ while True:
 print("Thanks for playing!")
 """
 
-# 3. Factual: Great Barrier Reef
 reef_prompt = """
 The Great Barrier Reef is the world's largest coral reef system, located in the Coral Sea off the northeastern coast of Queensland, Australia. It extends approximately 2,300 kilometres and consists of nearly 3,000 individual reefs and hundreds of islands. The ecosystem supports an extraordinary diversity of marine life, including more than 1,500 species of fish, hundreds of coral species, sea turtles, sharks, dolphins, and numerous seabirds.
 
@@ -71,7 +73,6 @@ Despite its ecological importance, the Great Barrier Reef faces significant envi
 Conservation efforts include marine protected areas, water-quality improvement programs, restrictions on fishing, and scientific monitoring. International organizations and Australian authorities continue to study ways to improve the reef's resilience against climate change and other environmental threats.
 """
 
-# 4. Recipe: Homemade Vegetable Soup
 soup_prompt = """
 Homemade Vegetable Soup
 
